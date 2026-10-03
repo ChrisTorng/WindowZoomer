@@ -13,20 +13,30 @@ fn make_icon(path: &std::path::Path) -> std::io::Result<()> {
             let dx = x as f32 - 27.0;
             let dy = y as f32 - 25.0;
             let r2 = dx * dx + dy * dy;
-            let ring = (15.0f32.powi(2)..=21.0f32.powi(2)).contains(&r2);
-            let handle = {
+            let outer_ring = (20.0f32.powi(2)..=23.0f32.powi(2)).contains(&r2);
+            let inner_ring = (16.0f32.powi(2)..20.0f32.powi(2)).contains(&r2);
+            let handle_outer = {
                 let a = x as i32 - y as i32;
-                x >= 39 && y >= 37 && x <= 58 && y <= 57 && (-3..=5).contains(&a)
+                x >= 38 && y >= 36 && x <= 60 && y <= 59 && (-5..=7).contains(&a)
             };
-            if ring || handle {
-                pixels[i] = 245;     // B
-                pixels[i + 1] = 245; // G
-                pixels[i + 2] = 245; // R
-                pixels[i + 3] = 255; // A
-            } else if r2 < 15.0f32.powi(2) {
-                pixels[i] = 160;
-                pixels[i + 1] = 95;
-                pixels[i + 2] = 35;
+            let handle_inner = {
+                let a = x as i32 - y as i32;
+                x >= 40 && y >= 38 && x <= 58 && y <= 57 && (-3..=5).contains(&a)
+            };
+            if outer_ring || (handle_outer && !handle_inner) {
+                pixels[i] = 25;
+                pixels[i + 1] = 25;
+                pixels[i + 2] = 25;
+                pixels[i + 3] = 255;
+            } else if inner_ring || handle_inner {
+                pixels[i] = 245;
+                pixels[i + 1] = 245;
+                pixels[i + 2] = 245;
+                pixels[i + 3] = 255;
+            } else if r2 < 16.0f32.powi(2) {
+                pixels[i] = 190;
+                pixels[i + 1] = 110;
+                pixels[i + 2] = 40;
                 pixels[i + 3] = 255;
             } else {
                 pixels[i] = 0;
