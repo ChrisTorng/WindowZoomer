@@ -484,7 +484,7 @@ impl AppState {
         unsafe {
             let verb = windows::core::w!("open");
             let explorer = windows::core::w!("explorer.exe");
-            let show = SW_SHOW.0 as i32;
+            let show = SW_SHOW;
 
             if let Some(path) = self.last_screenshot.as_ref().filter(|p| p.exists()) {
                 let params = wide_null(&format!("/select,\"{}\"", path.display()));
