@@ -25,3 +25,6 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 lto = "thin"
 codegen-units = 1
 strip = "symbols"
+
+[build-dependencies]
+winresource = "0.1.31"
