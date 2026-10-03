@@ -1,4 +1,5 @@
 #![windows_subsystem = "windows"]
+#![allow(unsafe_op_in_unsafe_fn)]
 
 use std::ffi::c_void;
 use std::path::PathBuf;
@@ -9,7 +10,7 @@ use image::{ImageBuffer, Rgba};
 use windows::core::{PCWSTR, Result as WinResult};
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, EndPaint, GetSysColorBrush, IntersectClipRect, PatBlt, RestoreDC, SaveDC,
+    BeginPaint, EndPaint, GetSysColorBrush, IntersectClipRect, InvalidateRect, PatBlt, RestoreDC, SaveDC,
     ScreenToClient, SetStretchBltMode, StretchDIBits, UpdateWindow, BITMAPINFO,
     BITMAPINFOHEADER, BI_RGB, BLACKNESS, COLORONCOLOR, COLOR_BTNFACE, DIB_RGB_COLORS,
     PAINTSTRUCT,
@@ -24,7 +25,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect,
-    GetForegroundWindow, GetMessageW, InvalidateRect, IsChild, IsWindow, LoadCursorW,
+    GetForegroundWindow, GetMessageW, IsChild, IsWindow, LoadCursorW,
     PostMessageW, PostQuitMessage, RegisterClassW, SetTimer, SetWindowLongPtrW, SetWindowTextW,
     ShowWindow, TranslateMessage, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, GWLP_USERDATA, HMENU,
     IDC_ARROW, MSG, SW_SHOW, WINDOW_EX_STYLE, WM_APP, WM_CLOSE, WM_COMMAND, WM_DESTROY,
