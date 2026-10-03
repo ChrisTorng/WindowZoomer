@@ -12,7 +12,7 @@ use windows::core::{PCWSTR, PWSTR, Result as WinResult};
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject,
-    EndPaint, GetSysColorBrush, InvalidateRect, PatBlt, ScreenToClient, SelectObject,
+    EndPaint, FillRect, GetSysColorBrush, InvalidateRect, PatBlt, ScreenToClient, SelectObject,
     SetStretchBltMode, StretchDIBits, UpdateWindow, BITMAPINFO,
     BITMAPINFOHEADER, BI_RGB, BLACKNESS, COLORONCOLOR, COLOR_BTNFACE, DIB_RGB_COLORS,
     PAINTSTRUCT, SRCCOPY,
@@ -29,17 +29,19 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetKeyState, ReleaseCapture, SetCapture, SetFocus, VK_ADD, VK_CONTROL, VK_DOWN, VK_LEFT,
     VK_OEM_MINUS, VK_OEM_PLUS, VK_RIGHT, VK_SHIFT, VK_SUBTRACT, VK_UP,
 };
+use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, FindWindowW, GetClassNameW,
     GetClientRect, GetForegroundWindow, GetMessageW, GetTopWindow, GetWindow, GetWindowLongPtrW,
-    GetWindowPlacement, IsChild, IsWindow, IsWindowVisible, LoadCursorW, MoveWindow,
+    GetWindowPlacement, IsChild, IsWindow, IsWindowVisible, LoadCursorW, LoadIconW, MoveWindow,
     PostMessageW, PostQuitMessage, RegisterClassW, SendMessageW, SetForegroundWindow, SetTimer,
+    SetWindowPos,
     SetWindowLongPtrW, SetWindowTextW, ShowWindow, TranslateMessage, CS_HREDRAW, CS_VREDRAW,
-    CW_USEDEFAULT, GWL_EXSTYLE, GW_HWNDNEXT, GWLP_USERDATA, HMENU, IDC_ARROW, MSG, SW_RESTORE,
+    CW_USEDEFAULT, GWL_EXSTYLE, GW_HWNDNEXT, GWLP_USERDATA, HMENU, HWND_TOPMOST, IDC_ARROW, MSG, SW_RESTORE,
     SW_SHOW, SW_SHOWMAXIMIZED, WINDOW_EX_STYLE,
     WINDOWPLACEMENT, WINDOW_STYLE, WM_APP, WM_CLOSE, WM_COMMAND, WM_DESTROY, WM_KEYDOWN,
     WM_ERASEBKGND, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_PAINT,
-    WM_SIZE, WM_TIMER, WNDCLASSW, WS_CHILD, WS_EX_TOOLWINDOW, WS_OVERLAPPEDWINDOW, WS_POPUP,
+    WM_SIZE, WM_TIMER, WNDCLASSW, WS_CHILD, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_OVERLAPPEDWINDOW, WS_POPUP,
     WS_VISIBLE,
 };
 use windows_capture::capture::{CaptureControl, Context, GraphicsCaptureApiHandler};
@@ -53,6 +55,7 @@ use windows_capture::window::Window;
 
 const CLASS_NAME: &str = "WindowZoomerMainWindow";
 const APP_TITLE: &str = "WindowZoomer";
+const IDI_APP: u16 = 1;
 const TOOLBAR_H: i32 = 42;
 const TIMER_FOREGROUND: usize = 1;
 const FOREGROUND_POLL_MS: u32 = 100;
@@ -478,16 +481,35 @@ impl AppState {
         let Some(dir) = screenshot_dir() else { return; };
         let _ = std::fs::create_dir_all(&dir);
 
-        let mut cmd = Command::new("explorer.exe");
-        if let Some(path) = self.last_screenshot.as_ref().filter(|p| p.exists()) {
-            let mut arg = std::ffi::OsString::from("/select,");
-            arg.push(path.as_os_str());
-            cmd.arg(arg);
-        } else {
-            cmd.arg(&dir);
+        unsafe {
+            let verb = windows::core::w!("open");
+            let explorer = windows::core::w!("explorer.exe");
+            let show = SW_SHOW.0 as i32;
+
+            if let Some(path) = self.last_screenshot.as_ref().filter(|p| p.exists()) {
+                let params = wide_null(&format!("/select,\"{}\"", path.display()));
+                let _ = ShellExecuteW(
+                    Some(self.hwnd),
+                    verb,
+                    explorer,
+                    PCWSTR(params.as_ptr()),
+                    PCWSTR::null(),
+                    show,
+                );
+            } else {
+                let target = wide_null(&dir.to_string_lossy());
+                let _ = ShellExecuteW(
+                    Some(self.hwnd),
+                    verb,
+                    PCWSTR(target.as_ptr()),
+                    PCWSTR::null(),
+                    PCWSTR::null(),
+                    show,
+                );
+            }
         }
-        let _ = cmd.spawn();
-        std::thread::sleep(std::time::Duration::from_millis(180));
+
+        std::thread::sleep(std::time::Duration::from_millis(250));
         bring_explorer_to_front();
     }
 }
@@ -649,6 +671,7 @@ unsafe extern "system" fn wnd_proc(
             if let Some(state) = state_mut(hwnd) {
                 state.clamp_pan();
                 state.refresh_title();
+                let _ = InvalidateRect(Some(hwnd), None, true);
                 if !state.status_hwnd.0.is_null() {
                     let mut rc = RECT::default();
                     let _ = GetClientRect(hwnd, &mut rc);
@@ -741,11 +764,15 @@ unsafe extern "system" fn wnd_proc(
             LRESULT(0)
         }
         WM_ERASEBKGND => LRESULT(1),
-        WM_ERASEBKGND => LRESULT(1),
         WM_PAINT => {
             let mut ps = PAINTSTRUCT::default();
             let hdc = BeginPaint(hwnd, &mut ps);
             if let Some(state) = state_mut(hwnd) {
+                let mut client = RECT::default();
+                let _ = GetClientRect(hwnd, &mut client);
+                let toolbar = RECT { left: 0, top: 0, right: client.right, bottom: TOOLBAR_H.min(client.bottom) };
+                let _ = FillRect(hdc, &toolbar, GetSysColorBrush(COLOR_BTNFACE));
+
                 let canvas = state.canvas_rect();
                 let cw = (canvas.right - canvas.left).max(0);
                 let ch = (canvas.bottom - canvas.top).max(0);
@@ -958,6 +985,7 @@ fn main() -> WinResult<()> {
         lpfnWndProc: Some(wnd_proc),
         hInstance: hinstance,
         hCursor: unsafe { LoadCursorW(None, IDC_ARROW)? },
+        hIcon: unsafe { LoadIconW(Some(hinstance), PCWSTR(IDI_APP as usize as *const u16)).unwrap_or_default() },
         hbrBackground: unsafe { GetSysColorBrush(COLOR_BTNFACE) },
         lpszClassName: PCWSTR(class_name.as_ptr()),
         ..Default::default()
@@ -990,6 +1018,13 @@ fn main() -> WinResult<()> {
         )?
     };
 
+    unsafe {
+        if let Ok(icon) = LoadIconW(Some(hinstance), PCWSTR(IDI_APP as usize as *const u16)) {
+            let _ = SendMessageW(hwnd, 0x0080, Some(WPARAM(1)), Some(LPARAM(icon.0 as isize)));
+            let _ = SendMessageW(hwnd, 0x0080, Some(WPARAM(0)), Some(LPARAM(icon.0 as isize)));
+        }
+    }
+
     let state = Box::new(AppState::new(hwnd));
     unsafe {
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(state) as isize);
@@ -1011,7 +1046,7 @@ fn main() -> WinResult<()> {
 
     let tooltip = unsafe {
         CreateWindowExW(
-            WINDOW_EX_STYLE::default(),
+            WS_EX_TOPMOST,
             TOOLTIPS_CLASSW,
             PCWSTR::null(),
             WS_POPUP | WINDOW_STYLE(TTS_ALWAYSTIP as u32),
@@ -1031,7 +1066,13 @@ fn main() -> WinResult<()> {
     add_tooltip(tooltip, hwnd, b_fit, "Fit to viewer (0 / F)");
     add_tooltip(tooltip, hwnd, b_shot, "Save current viewport (Ctrl+S)");
     add_tooltip(tooltip, hwnd, b_open, "開啟 Screenshots；本次已截圖時選取最後儲存檔 (Ctrl+O)");
-    unsafe { let _ = SendMessageW(tooltip, windows::Win32::UI::Controls::TTM_ACTIVATE, Some(WPARAM(1)), None); }
+    unsafe {
+        let _ = SendMessageW(tooltip, windows::Win32::UI::Controls::TTM_ACTIVATE, Some(WPARAM(1)), None);
+        let _ = SetWindowPos(tooltip, Some(HWND_TOPMOST), 0, 0, 0, 0,
+            windows::Win32::UI::WindowsAndMessaging::SWP_NOMOVE |
+            windows::Win32::UI::WindowsAndMessaging::SWP_NOSIZE |
+            windows::Win32::UI::WindowsAndMessaging::SWP_NOACTIVATE);
+    }
 
     unsafe {
         let show = if saved.map(|s| s.maximized).unwrap_or(true) {
