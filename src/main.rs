@@ -18,8 +18,8 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{
-    InitCommonControlsEx, INITCOMMONCONTROLSEX, ICC_WIN95_CLASSES, TOOLINFOW, TOOLTIPS_CLASSW,
-    TTF_IDISHWND, TTF_SUBCLASS, TTM_ADDTOOLW, TTS_ALWAYSTIP,
+    InitCommonControlsEx, INITCOMMONCONTROLSEX, ICC_WIN95_CLASSES, TOOLTIPS_CLASSW,
+    TTM_ADDTOOLW, TTS_ALWAYSTIP,
 };
 use windows::Win32::UI::HiDpi::{
     SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
@@ -61,6 +61,22 @@ const ID_FIT: usize = 1004;
 const ID_SCREENSHOT: usize = 1005;
 const ID_FOLDER: usize = 1006;
 const ID_LAST: usize = 1007;
+
+const TTF_IDISHWND_RAW: u32 = 0x0001;
+const TTF_SUBCLASS_RAW: u32 = 0x0010;
+
+#[repr(C)]
+struct ToolInfoW {
+    cb_size: u32,
+    u_flags: u32,
+    hwnd: HWND,
+    u_id: usize,
+    rect: RECT,
+    hinst: HINSTANCE,
+    lpsz_text: PWSTR,
+    l_param: LPARAM,
+    lp_reserved: *mut c_void,
+}
 
 #[derive(Default)]
 struct FrameData {
@@ -503,7 +519,7 @@ fn save_window_state(hwnd: HWND) {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    let maximized = placement.showCmd == SW_SHOWMAXIMIZED;
+    let maximized = placement.showCmd == SW_SHOWMAXIMIZED.0 as u32;
     let text = format!(
         "{} {} {} {} {}",
         r.left,
@@ -822,20 +838,23 @@ fn create_button(
 
 fn add_tooltip(tooltip: HWND, parent: HWND, control: HWND, text: &str) {
     let leaked: &'static mut [u16] = Box::leak(wide_null(text).into_boxed_slice());
-    let mut info = TOOLINFOW {
-        cbSize: std::mem::size_of::<TOOLINFOW>() as u32,
-        uFlags: TTF_IDISHWND | TTF_SUBCLASS,
+    let mut info = ToolInfoW {
+        cb_size: std::mem::size_of::<ToolInfoW>() as u32,
+        u_flags: TTF_IDISHWND_RAW | TTF_SUBCLASS_RAW,
         hwnd: parent,
-        uId: control.0 as usize,
-        lpszText: PWSTR(leaked.as_mut_ptr()),
-        ..Default::default()
+        u_id: control.0 as usize,
+        rect: RECT::default(),
+        hinst: HINSTANCE::default(),
+        lpsz_text: PWSTR(leaked.as_mut_ptr()),
+        l_param: LPARAM(0),
+        lp_reserved: std::ptr::null_mut(),
     };
     unsafe {
         let _ = SendMessageW(
             tooltip,
             TTM_ADDTOOLW,
-            WPARAM(0),
-            LPARAM((&mut info as *mut TOOLINFOW) as isize),
+            Some(WPARAM(0)),
+            Some(LPARAM((&mut info as *mut ToolInfoW) as isize)),
         );
     }
 }
