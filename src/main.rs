@@ -9,25 +9,27 @@ use image::{ImageBuffer, Rgba};
 use windows::core::{PCWSTR, Result as WinResult};
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, EndPaint, IntersectClipRect, PatBlt, RestoreDC, SaveDC, SetStretchBltMode,
-    StretchDIBits, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLACKNESS, COLORONCOLOR, DIB_RGB_COLORS,
+    BeginPaint, EndPaint, GetSysColorBrush, IntersectClipRect, PatBlt, RestoreDC, SaveDC,
+    ScreenToClient, SetStretchBltMode, StretchDIBits, UpdateWindow, BITMAPINFO,
+    BITMAPINFOHEADER, BI_RGB, BLACKNESS, COLORONCOLOR, COLOR_BTNFACE, DIB_RGB_COLORS,
     PAINTSTRUCT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::{
     SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
 };
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetKeyState, ReleaseCapture, SetCapture, SetFocus, VK_ADD, VK_CONTROL, VK_DOWN, VK_LEFT,
+    VK_OEM_MINUS, VK_OEM_PLUS, VK_RIGHT, VK_SHIFT, VK_SUBTRACT, VK_UP,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect,
-    GetForegroundWindow, GetKeyState, GetMessageW, GetSysColorBrush, InvalidateRect, IsChild,
-    IsWindow, LoadCursorW, PostMessageW, PostQuitMessage, RegisterClassW, ReleaseCapture,
-    ScreenToClient, SetCapture, SetFocus, SetTimer, SetWindowLongPtrW, SetWindowTextW, ShowWindow,
-    TranslateMessage, UpdateWindow, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT,
-    GWLP_USERDATA, HMENU, IDC_ARROW, MSG, SW_SHOW, VK_ADD, VK_CONTROL, VK_DOWN, VK_LEFT,
-    VK_OEM_MINUS, VK_OEM_PLUS, VK_RIGHT, VK_SHIFT, VK_SUBTRACT, VK_UP, WINDOW_EX_STYLE,
-    WM_APP, WM_CLOSE, WM_COMMAND, WM_DESTROY, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_PAINT, WM_SIZE, WM_TIMER, WNDCLASSW, WS_CHILD,
-    WS_OVERLAPPEDWINDOW, WS_VISIBLE, BS_PUSHBUTTON, COLOR_BTNFACE,
+    GetForegroundWindow, GetMessageW, InvalidateRect, IsChild, IsWindow, LoadCursorW,
+    PostMessageW, PostQuitMessage, RegisterClassW, SetTimer, SetWindowLongPtrW, SetWindowTextW,
+    ShowWindow, TranslateMessage, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, GWLP_USERDATA, HMENU,
+    IDC_ARROW, MSG, SW_SHOW, WINDOW_EX_STYLE, WM_APP, WM_CLOSE, WM_COMMAND, WM_DESTROY,
+    WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_PAINT, WM_SIZE,
+    WM_TIMER, WNDCLASSW, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
 };
 use windows_capture::capture::{CaptureControl, Context, GraphicsCaptureApiHandler};
 use windows_capture::frame::Frame;
@@ -104,7 +106,7 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
 
         let hwnd = HWND(self.flags.notify_hwnd as *mut c_void);
         unsafe {
-            let _ = PostMessageW(hwnd, WM_FRAME_READY, WPARAM(0), LPARAM(0));
+            let _ = PostMessageW(Some(hwnd), WM_FRAME_READY, WPARAM(0), LPARAM(0));
         }
         Ok(())
     }
@@ -403,11 +405,13 @@ fn wide_null(s: &str) -> Vec<u16> {
 }
 
 unsafe fn state_mut(hwnd: HWND) -> Option<&'static mut AppState> {
-    let ptr = windows::Win32::UI::WindowsAndMessaging::GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+    let ptr = unsafe {
+        windows::Win32::UI::WindowsAndMessaging::GetWindowLongPtrW(hwnd, GWLP_USERDATA)
+    };
     if ptr == 0 {
         None
     } else {
-        Some(&mut *(ptr as *mut AppState))
+        Some(unsafe { &mut *(ptr as *mut AppState) })
     }
 }
 
@@ -654,7 +658,7 @@ fn create_button(
             WINDOW_EX_STYLE::default(),
             windows::core::w!("BUTTON"),
             PCWSTR(text.as_ptr()),
-            WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+            WS_CHILD | WS_VISIBLE,
             x,
             6,
             width,
@@ -692,7 +696,7 @@ fn main() -> WinResult<()> {
 
     unsafe {
         if RegisterClassW(&wc) == 0 {
-            return Err(windows::core::Error::from_win32());
+            return Err(windows::core::Error::empty());
         }
     }
 
@@ -733,7 +737,7 @@ fn main() -> WinResult<()> {
 
     unsafe {
         ShowWindow(hwnd, SW_SHOW);
-        UpdateWindow(hwnd)?;
+        let _ = UpdateWindow(hwnd);
         let _ = SetFocus(Some(hwnd));
         SetTimer(Some(hwnd), TIMER_FOREGROUND, FOREGROUND_POLL_MS, None);
     }
