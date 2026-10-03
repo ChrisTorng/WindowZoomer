@@ -20,7 +20,7 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{
     InitCommonControlsEx, INITCOMMONCONTROLSEX, ICC_WIN95_CLASSES, TOOLTIPS_CLASSW,
-    TTM_ADDTOOLW, TTS_ALWAYSTIP,
+    TTF_IDISHWND, TTF_SUBCLASS, TTM_ADDTOOLW, TTS_ALWAYSTIP, TTTOOLINFOW,
 };
 use windows::Win32::UI::HiDpi::{
     SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
@@ -67,22 +67,6 @@ const ID_100: usize = 1003;
 const ID_FIT: usize = 1004;
 const ID_SCREENSHOT: usize = 1005;
 const ID_OPEN: usize = 1006;
-
-const TTF_IDISHWND_RAW: u32 = 0x0001;
-const TTF_SUBCLASS_RAW: u32 = 0x0010;
-
-#[repr(C)]
-struct ToolInfoW {
-    cb_size: u32,
-    u_flags: u32,
-    hwnd: HWND,
-    u_id: usize,
-    rect: RECT,
-    hinst: HINSTANCE,
-    lpsz_text: PWSTR,
-    l_param: LPARAM,
-    lp_reserved: *mut c_void,
-}
 
 #[derive(Default)]
 struct FrameData {
@@ -235,8 +219,9 @@ impl AppState {
     }
 
     fn repaint(&self) {
+        let canvas = self.canvas_rect();
         unsafe {
-            let _ = InvalidateRect(Some(self.hwnd), None, false);
+            let _ = InvalidateRect(Some(self.hwnd), Some(&canvas), false);
         }
     }
 
@@ -671,12 +656,6 @@ unsafe extern "system" fn wnd_proc(
             if let Some(state) = state_mut(hwnd) {
                 state.clamp_pan();
                 state.refresh_title();
-                let _ = InvalidateRect(Some(hwnd), None, true);
-                if !state.status_hwnd.0.is_null() {
-                    let mut rc = RECT::default();
-                    let _ = GetClientRect(hwnd, &mut rc);
-                    let _ = MoveWindow(state.status_hwnd, 412, 12, (rc.right - 420).max(80), 22, true);
-                }
                 state.repaint();
             }
             LRESULT(0)
@@ -685,7 +664,12 @@ unsafe extern "system" fn wnd_proc(
             if let Some(state) = state_mut(hwnd) {
                 state.clamp_pan();
                 state.refresh_title();
-                state.repaint();
+                if !state.status_hwnd.0.is_null() {
+                    let mut rc = RECT::default();
+                    let _ = GetClientRect(hwnd, &mut rc);
+                    let _ = MoveWindow(state.status_hwnd, 412, 12, (rc.right - 420).max(80), 22, true);
+                }
+                let _ = InvalidateRect(Some(hwnd), None, true);
             }
             LRESULT(0)
         }
@@ -878,27 +862,23 @@ fn create_button(
 
 fn add_tooltip(tooltip: HWND, parent: HWND, control: HWND, text: &str) {
     let leaked: &'static mut [u16] = Box::leak(wide_null(text).into_boxed_slice());
-    let mut info = ToolInfoW {
-        cb_size: std::mem::size_of::<ToolInfoW>() as u32,
-        u_flags: TTF_IDISHWND_RAW | TTF_SUBCLASS_RAW,
+    let mut info = TTTOOLINFOW {
+        cbSize: std::mem::size_of::<TTTOOLINFOW>() as u32,
+        uFlags: TTF_IDISHWND | TTF_SUBCLASS,
         hwnd: parent,
-        u_id: control.0 as usize,
-        rect: RECT::default(),
-        hinst: HINSTANCE::default(),
-        lpsz_text: PWSTR(leaked.as_mut_ptr()),
-        l_param: LPARAM(0),
-        lp_reserved: std::ptr::null_mut(),
+        uId: control.0 as usize,
+        lpszText: PWSTR(leaked.as_mut_ptr()),
+        ..Default::default()
     };
     unsafe {
         let _ = SendMessageW(
             tooltip,
             TTM_ADDTOOLW,
             Some(WPARAM(0)),
-            Some(LPARAM((&mut info as *mut ToolInfoW) as isize)),
+            Some(LPARAM((&mut info as *mut TTTOOLINFOW) as isize)),
         );
     }
 }
-
 
 fn window_class(hwnd: HWND) -> String {
     let mut buf = [0u16; 256];
