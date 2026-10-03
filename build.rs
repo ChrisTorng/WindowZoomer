@@ -13,30 +13,32 @@ fn make_icon(path: &std::path::Path) -> std::io::Result<()> {
             let dx = x as f32 - 27.0;
             let dy = y as f32 - 25.0;
             let r2 = dx * dx + dy * dy;
-            let outer_ring = (20.0f32.powi(2)..=23.0f32.powi(2)).contains(&r2);
-            let inner_ring = (16.0f32.powi(2)..20.0f32.powi(2)).contains(&r2);
-            let handle_outer = {
-                let a = x as i32 - y as i32;
-                x >= 38 && y >= 36 && x <= 60 && y <= 59 && (-5..=7).contains(&a)
-            };
-            let handle_inner = {
-                let a = x as i32 - y as i32;
-                x >= 40 && y >= 38 && x <= 58 && y <= 57 && (-3..=5).contains(&a)
-            };
-            if outer_ring || (handle_outer && !handle_inner) {
-                pixels[i] = 25;
-                pixels[i + 1] = 25;
-                pixels[i + 2] = 25;
+            let outline = (19.5f32.powi(2)..=21.5f32.powi(2)).contains(&r2);
+            let fill_ring = (16.0f32.powi(2)..19.5f32.powi(2)).contains(&r2);
+
+            // Handle follows the same visual weight as the circle outline.
+            // It starts just outside the ring so there is no stray seam through the lens.
+            let hx = x as f32 - 40.0;
+            let hy = y as f32 - 38.0;
+            let along = (hx + hy) * 0.70710677;
+            let across = (hx - hy) * 0.70710677;
+            let handle_outline = (0.0..=26.0).contains(&along) && across.abs() <= 3.4;
+            let handle_fill = (1.5..=24.5).contains(&along) && across.abs() <= 1.8;
+
+            if outline || (handle_outline && !handle_fill) {
+                pixels[i] = 35;
+                pixels[i + 1] = 35;
+                pixels[i + 2] = 35;
                 pixels[i + 3] = 255;
-            } else if inner_ring || handle_inner {
+            } else if fill_ring || handle_fill {
                 pixels[i] = 245;
                 pixels[i + 1] = 245;
                 pixels[i + 2] = 245;
                 pixels[i + 3] = 255;
             } else if r2 < 16.0f32.powi(2) {
-                pixels[i] = 190;
-                pixels[i + 1] = 110;
-                pixels[i + 2] = 40;
+                pixels[i] = 195;
+                pixels[i + 1] = 115;
+                pixels[i + 2] = 45;
                 pixels[i + 3] = 255;
             } else {
                 pixels[i] = 0;
