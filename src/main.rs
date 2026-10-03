@@ -21,7 +21,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect,
     GetForegroundWindow, GetKeyState, GetMessageW, GetSysColorBrush, InvalidateRect, IsChild,
     IsWindow, LoadCursorW, PostMessageW, PostQuitMessage, RegisterClassW, ReleaseCapture,
-    SetCapture, SetFocus, SetTimer, SetWindowLongPtrW, SetWindowTextW, ShowWindow,
+    ScreenToClient, SetCapture, SetFocus, SetTimer, SetWindowLongPtrW, SetWindowTextW, ShowWindow,
     TranslateMessage, UpdateWindow, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT,
     GWLP_USERDATA, HMENU, IDC_ARROW, MSG, SW_SHOW, VK_ADD, VK_CONTROL, VK_DOWN, VK_LEFT,
     VK_OEM_MINUS, VK_OEM_PLUS, VK_RIGHT, VK_SHIFT, VK_SUBTRACT, VK_UP, WINDOW_EX_STYLE,
@@ -340,6 +340,9 @@ impl AppState {
         let top = (ch as f64 - sh) / 2.0 + self.pan_y;
 
         let mut out = vec![0u8; cw as usize * ch as usize * 4];
+        for px in out.chunks_exact_mut(4) {
+            px[3] = 255;
+        }
         for y in 0..ch {
             let sy = ((y as f64 - top) / scale).floor() as i64;
             if sy < 0 || sy >= fh as i64 {
@@ -504,7 +507,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                     x: x_screen,
                     y: y_screen,
                 };
-                let _ = windows::Win32::Graphics::Gdi::ScreenToClient(hwnd, &mut pt);
+                let _ = ScreenToClient(hwnd, &mut pt);
                 if pt.y >= TOOLBAR_H {
                     let factor = if delta > 0 { 1.25 } else { 0.8 };
                     state.zoom_at(factor, pt.x as f64, pt.y as f64);
