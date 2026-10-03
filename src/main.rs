@@ -31,7 +31,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, FindWindowW, GetClassNameW,
-    GetClientRect, GetForegroundWindow, GetMessageW, GetWindow, GetWindowLongPtrW,
+    GetClientRect, GetForegroundWindow, GetMessageW, GetTopWindow, GetWindow, GetWindowLongPtrW,
     GetWindowPlacement, IsChild, IsWindow, IsWindowVisible, LoadCursorW, MoveWindow,
     PostMessageW, PostQuitMessage, RegisterClassW, SendMessageW, SetForegroundWindow, SetTimer,
     SetWindowLongPtrW, SetWindowTextW, ShowWindow, TranslateMessage, CS_HREDRAW, CS_VREDRAW,
@@ -912,7 +912,7 @@ fn find_next_capture_candidate(start: HWND, own: HWND) -> Option<HWND> {
 }
 
 fn bring_explorer_to_front() {
-    let mut cur = unsafe { GetWindow(HWND::default(), GW_HWNDNEXT) };
+    let mut cur = unsafe { GetTopWindow(None) };
     for _ in 0..128 {
         let Ok(hwnd) = cur else { break; };
         if hwnd.0.is_null() { break; }
