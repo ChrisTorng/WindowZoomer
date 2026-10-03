@@ -11,10 +11,11 @@ use image::{ImageBuffer, Rgba};
 use windows::core::{PCWSTR, PWSTR, Result as WinResult};
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, EndPaint, GetSysColorBrush, IntersectClipRect, InvalidateRect, PatBlt, RestoreDC,
-    SaveDC, ScreenToClient, SetStretchBltMode, StretchDIBits, UpdateWindow, BITMAPINFO,
+    BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject,
+    EndPaint, GetSysColorBrush, InvalidateRect, PatBlt, ScreenToClient, SelectObject,
+    SetStretchBltMode, StretchDIBits, UpdateWindow, BITMAPINFO,
     BITMAPINFOHEADER, BI_RGB, BLACKNESS, COLORONCOLOR, COLOR_BTNFACE, DIB_RGB_COLORS,
-    PAINTSTRUCT,
+    PAINTSTRUCT, SRCCOPY,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{
@@ -29,14 +30,17 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VK_OEM_MINUS, VK_OEM_PLUS, VK_RIGHT, VK_SHIFT, VK_SUBTRACT, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect,
-    GetForegroundWindow, GetMessageW, GetWindowPlacement, IsChild, IsWindow, LoadCursorW,
-    PostMessageW, PostQuitMessage, RegisterClassW, SendMessageW, SetTimer, SetWindowLongPtrW,
-    SetWindowTextW, ShowWindow, TranslateMessage, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT,
-    GWLP_USERDATA, HMENU, IDC_ARROW, MSG, SW_SHOW, SW_SHOWMAXIMIZED, WINDOW_EX_STYLE,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, FindWindowW, GetClassNameW,
+    GetClientRect, GetForegroundWindow, GetMessageW, GetWindow, GetWindowLongPtrW,
+    GetWindowPlacement, IsChild, IsWindow, IsWindowVisible, LoadCursorW, MoveWindow,
+    PostMessageW, PostQuitMessage, RegisterClassW, SendMessageW, SetForegroundWindow, SetTimer,
+    SetWindowLongPtrW, SetWindowTextW, ShowWindow, TranslateMessage, CS_HREDRAW, CS_VREDRAW,
+    CW_USEDEFAULT, GWL_EXSTYLE, GW_HWNDNEXT, GWLP_USERDATA, HMENU, IDC_ARROW, MSG, SW_RESTORE,
+    SW_SHOW, SW_SHOWMAXIMIZED, WINDOW_EX_STYLE,
     WINDOWPLACEMENT, WINDOW_STYLE, WM_APP, WM_CLOSE, WM_COMMAND, WM_DESTROY, WM_KEYDOWN,
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_PAINT, WM_SIZE, WM_TIMER,
-    WNDCLASSW, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_POPUP, WS_VISIBLE,
+    WM_ERASEBKGND, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_PAINT,
+    WM_SIZE, WM_TIMER, WNDCLASSW, WS_CHILD, WS_EX_TOOLWINDOW, WS_OVERLAPPEDWINDOW, WS_POPUP,
+    WS_VISIBLE,
 };
 use windows_capture::capture::{CaptureControl, Context, GraphicsCaptureApiHandler};
 use windows_capture::frame::Frame;
@@ -59,8 +63,7 @@ const ID_ZOOM_OUT: usize = 1002;
 const ID_100: usize = 1003;
 const ID_FIT: usize = 1004;
 const ID_SCREENSHOT: usize = 1005;
-const ID_FOLDER: usize = 1006;
-const ID_LAST: usize = 1007;
+const ID_OPEN: usize = 1006;
 
 const TTF_IDISHWND_RAW: u32 = 0x0001;
 const TTF_SUBCLASS_RAW: u32 = 0x0010;
@@ -159,6 +162,7 @@ struct AppState {
     drag_last_x: i32,
     drag_last_y: i32,
     last_screenshot: Option<PathBuf>,
+    status_hwnd: HWND,
 }
 
 impl AppState {
@@ -175,6 +179,7 @@ impl AppState {
             drag_last_x: 0,
             drag_last_y: 0,
             last_screenshot: None,
+            status_hwnd: HWND::default(),
         }
     }
 
@@ -456,22 +461,34 @@ impl AppState {
             let _ = std::fs::create_dir_all(parent);
         }
         if image.save(&path).is_ok() {
-            self.last_screenshot = Some(path);
+            self.last_screenshot = Some(path.clone());
+            self.set_status(&format!("已儲存至 {}", path.display()));
         }
     }
 
-    fn open_screenshot_folder(&self) {
-        if let Some(dir) = screenshot_dir() {
-            let _ = std::fs::create_dir_all(&dir);
-            let _ = Command::new("explorer.exe").arg(dir).spawn();
+    fn set_status(&self, text: &str) {
+        if self.status_hwnd.0.is_null() {
+            return;
         }
+        let wide = wide_null(text);
+        unsafe { let _ = SetWindowTextW(self.status_hwnd, PCWSTR(wide.as_ptr())); }
     }
 
-    fn reveal_last_screenshot(&self) {
+    fn open_screenshot_location(&self) {
+        let Some(dir) = screenshot_dir() else { return; };
+        let _ = std::fs::create_dir_all(&dir);
+
+        let mut cmd = Command::new("explorer.exe");
         if let Some(path) = self.last_screenshot.as_ref().filter(|p| p.exists()) {
-            let arg = format!("/select,\"{}\"", path.display());
-            let _ = Command::new("explorer.exe").arg(arg).spawn();
+            let mut arg = std::ffi::OsString::from("/select,");
+            arg.push(path.as_os_str());
+            cmd.arg(arg);
+        } else {
+            cmd.arg(&dir);
         }
+        let _ = cmd.spawn();
+        std::thread::sleep(std::time::Duration::from_millis(180));
+        bring_explorer_to_front();
     }
 }
 
@@ -600,8 +617,7 @@ unsafe extern "system" fn wnd_proc(
                     ID_100 => state.set_100(),
                     ID_FIT => state.set_fit(),
                     ID_SCREENSHOT => state.save_screenshot(),
-                    ID_FOLDER => state.open_screenshot_folder(),
-                    ID_LAST => state.reveal_last_screenshot(),
+                    ID_OPEN => state.open_screenshot_location(),
                     _ => {}
                 }
                 let _ = SetFocus(Some(hwnd));
@@ -612,7 +628,7 @@ unsafe extern "system" fn wnd_proc(
             if wparam.0 == TIMER_FOREGROUND {
                 if let Some(state) = state_mut(hwnd) {
                     let fg = GetForegroundWindow();
-                    if !fg.0.is_null() && !state.target_is_ours(fg) {
+                    if !fg.0.is_null() && !state.target_is_ours(fg) && is_capture_candidate(fg, hwnd) {
                         state.switch_target(fg);
                     } else if let Some(target) = state.target {
                         let target_hwnd = HWND(target.as_raw_hwnd());
@@ -633,6 +649,11 @@ unsafe extern "system" fn wnd_proc(
             if let Some(state) = state_mut(hwnd) {
                 state.clamp_pan();
                 state.refresh_title();
+                if !state.status_hwnd.0.is_null() {
+                    let mut rc = RECT::default();
+                    let _ = GetClientRect(hwnd, &mut rc);
+                    let _ = MoveWindow(state.status_hwnd, 412, 12, (rc.right - 420).max(80), 22, true);
+                }
                 state.repaint();
             }
             LRESULT(0)
@@ -651,10 +672,7 @@ unsafe extern "system" fn wnd_proc(
                 let step = if shift_down() { 120.0 } else { 36.0 };
                 match key {
                     k if ctrl_down() && k == b'S' as u16 => state.save_screenshot(),
-                    k if ctrl_down() && shift_down() && k == b'O' as u16 => {
-                        state.reveal_last_screenshot()
-                    }
-                    k if ctrl_down() && k == b'O' as u16 => state.open_screenshot_folder(),
+                    k if ctrl_down() && k == b'O' as u16 => state.open_screenshot_location(),
                     k if k == VK_OEM_PLUS.0 || k == VK_ADD.0 || k == b'=' as u16 => {
                         state.step_zoom(1)
                     }
@@ -722,6 +740,8 @@ unsafe extern "system" fn wnd_proc(
             }
             LRESULT(0)
         }
+        WM_ERASEBKGND => LRESULT(1),
+        WM_ERASEBKGND => LRESULT(1),
         WM_PAINT => {
             let mut ps = PAINTSTRUCT::default();
             let hdc = BeginPaint(hwnd, &mut ps);
@@ -730,58 +750,51 @@ unsafe extern "system" fn wnd_proc(
                 let cw = (canvas.right - canvas.left).max(0);
                 let ch = (canvas.bottom - canvas.top).max(0);
                 if cw > 0 && ch > 0 {
-                    let saved = SaveDC(hdc);
-                    let _ =
-                        IntersectClipRect(hdc, canvas.left, canvas.top, canvas.right, canvas.bottom);
-                    let _ = PatBlt(hdc, canvas.left, canvas.top, cw, ch, BLACKNESS);
+                    let memdc = CreateCompatibleDC(Some(hdc));
+                    if !memdc.0.is_null() {
+                        let bitmap = CreateCompatibleBitmap(hdc, cw, ch);
+                        if !bitmap.0.is_null() {
+                            let old = SelectObject(memdc, bitmap.into());
+                            let _ = PatBlt(memdc, 0, 0, cw, ch, BLACKNESS);
 
-                    if let Ok(frame) = state.shared.lock() {
-                        if frame.width > 0
-                            && frame.height > 0
-                            && frame.pixels.len()
-                                >= frame.width as usize * frame.height as usize * 4
-                        {
-                            let scale =
-                                state.effective_scale(canvas, frame.width, frame.height);
-                            let dw = (frame.width as f64 * scale).round() as i32;
-                            let dh = (frame.height as f64 * scale).round() as i32;
-                            let dx = canvas.left
-                                + ((cw - dw) as f64 / 2.0 + state.pan_x).round() as i32;
-                            let dy = canvas.top
-                                + ((ch - dh) as f64 / 2.0 + state.pan_y).round() as i32;
+                            if let Ok(frame) = state.shared.lock() {
+                                if frame.width > 0
+                                    && frame.height > 0
+                                    && frame.pixels.len() >= frame.width as usize * frame.height as usize * 4
+                                {
+                                    let scale = state.effective_scale(canvas, frame.width, frame.height);
+                                    let dw = (frame.width as f64 * scale).round() as i32;
+                                    let dh = (frame.height as f64 * scale).round() as i32;
+                                    let dx = ((cw - dw) as f64 / 2.0 + state.pan_x).round() as i32;
+                                    let dy = ((ch - dh) as f64 / 2.0 + state.pan_y).round() as i32;
+                                    let info = BITMAPINFO {
+                                        bmiHeader: BITMAPINFOHEADER {
+                                            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                                            biWidth: frame.width as i32,
+                                            biHeight: -(frame.height as i32),
+                                            biPlanes: 1,
+                                            biBitCount: 32,
+                                            biCompression: BI_RGB.0,
+                                            ..Default::default()
+                                        },
+                                        ..Default::default()
+                                    };
+                                    let _ = SetStretchBltMode(memdc, COLORONCOLOR);
+                                    let _ = StretchDIBits(
+                                        memdc, dx, dy, dw, dh, 0, 0,
+                                        frame.width as i32, frame.height as i32,
+                                        Some(frame.pixels.as_ptr() as *const c_void),
+                                        &info, DIB_RGB_COLORS, SRCCOPY,
+                                    );
+                                }
+                            }
 
-                            let info = BITMAPINFO {
-                                bmiHeader: BITMAPINFOHEADER {
-                                    biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-                                    biWidth: frame.width as i32,
-                                    biHeight: -(frame.height as i32),
-                                    biPlanes: 1,
-                                    biBitCount: 32,
-                                    biCompression: BI_RGB.0,
-                                    ..Default::default()
-                                },
-                                ..Default::default()
-                            };
-
-                            let _ = SetStretchBltMode(hdc, COLORONCOLOR);
-                            let _ = StretchDIBits(
-                                hdc,
-                                dx,
-                                dy,
-                                dw,
-                                dh,
-                                0,
-                                0,
-                                frame.width as i32,
-                                frame.height as i32,
-                                Some(frame.pixels.as_ptr() as *const c_void),
-                                &info,
-                                DIB_RGB_COLORS,
-                                windows::Win32::Graphics::Gdi::SRCCOPY,
-                            );
+                            let _ = BitBlt(hdc, canvas.left, canvas.top, cw, ch, Some(memdc), 0, 0, SRCCOPY);
+                            let _ = SelectObject(memdc, old);
+                            let _ = DeleteObject(bitmap.into());
                         }
+                        let _ = DeleteDC(memdc);
                     }
-                    let _ = RestoreDC(hdc, saved);
                 }
             }
             let _ = EndPaint(hwnd, &ps);
@@ -859,6 +872,61 @@ fn add_tooltip(tooltip: HWND, parent: HWND, control: HWND, text: &str) {
     }
 }
 
+
+fn window_class(hwnd: HWND) -> String {
+    let mut buf = [0u16; 256];
+    let n = unsafe { GetClassNameW(hwnd, &mut buf) };
+    if n <= 0 { String::new() } else { String::from_utf16_lossy(&buf[..n as usize]) }
+}
+
+fn is_capture_candidate(hwnd: HWND, own: HWND) -> bool {
+    if hwnd.0.is_null() || hwnd == own || unsafe { !IsWindowVisible(hwnd).as_bool() } {
+        return false;
+    }
+    let ex = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } as u32;
+    if ex & WS_EX_TOOLWINDOW.0 != 0 {
+        return false;
+    }
+    let class = window_class(hwnd);
+    if matches!(
+        class.as_str(),
+        "Shell_TrayWnd" | "Shell_SecondaryTrayWnd" | "NotifyIconOverflowWindow" |
+        "Progman" | "WorkerW" | "Windows.UI.Core.CoreWindow" | "XamlExplorerHostIslandWindow"
+    ) || class.to_ascii_lowercase().contains("objectdock") {
+        return false;
+    }
+    Window::from_raw_hwnd(hwnd.0).is_valid()
+}
+
+fn find_next_capture_candidate(start: HWND, own: HWND) -> Option<HWND> {
+    let mut cur = unsafe { GetWindow(start, GW_HWNDNEXT) };
+    for _ in 0..256 {
+        let Ok(hwnd) = cur else { break; };
+        if hwnd.0.is_null() { break; }
+        if is_capture_candidate(hwnd, own) {
+            return Some(hwnd);
+        }
+        cur = unsafe { GetWindow(hwnd, GW_HWNDNEXT) };
+    }
+    None
+}
+
+fn bring_explorer_to_front() {
+    let mut cur = unsafe { GetWindow(HWND::default(), GW_HWNDNEXT) };
+    for _ in 0..128 {
+        let Ok(hwnd) = cur else { break; };
+        if hwnd.0.is_null() { break; }
+        if window_class(hwnd) == "CabinetWClass" && unsafe { IsWindowVisible(hwnd).as_bool() } {
+            unsafe {
+                ShowWindow(hwnd, SW_RESTORE);
+                let _ = SetForegroundWindow(hwnd);
+            }
+            break;
+        }
+        cur = unsafe { GetWindow(hwnd, GW_HWNDNEXT) };
+    }
+}
+
 fn main() -> WinResult<()> {
     unsafe {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
@@ -869,10 +937,18 @@ fn main() -> WinResult<()> {
         let _ = InitCommonControlsEx(&controls);
     }
 
-    let initial_target = unsafe { GetForegroundWindow() };
     let saved = load_window_state();
 
     let class_name = wide_null(CLASS_NAME);
+    unsafe {
+        if let Ok(existing) = FindWindowW(PCWSTR(class_name.as_ptr()), PCWSTR::null()) {
+            if !existing.0.is_null() {
+                ShowWindow(existing, SW_RESTORE);
+                let _ = SetForegroundWindow(existing);
+                return Ok(());
+            }
+        }
+    }
     let title = wide_null(APP_TITLE);
     let module = unsafe { GetModuleHandleW(None)? };
     let hinstance = HINSTANCE(module.0);
@@ -924,8 +1000,14 @@ fn main() -> WinResult<()> {
     let b_100 = create_button(hwnd, hinstance, ID_100, "100%", 102, 64)?;
     let b_fit = create_button(hwnd, hinstance, ID_FIT, "Fit", 172, 54)?;
     let b_shot = create_button(hwnd, hinstance, ID_SCREENSHOT, "Screenshot", 232, 94)?;
-    let b_folder = create_button(hwnd, hinstance, ID_FOLDER, "Folder", 332, 72)?;
-    let b_last = create_button(hwnd, hinstance, ID_LAST, "Last", 410, 62)?;
+    let b_open = create_button(hwnd, hinstance, ID_OPEN, "Open", 332, 72)?;
+    let status = unsafe {
+        CreateWindowExW(
+            WINDOW_EX_STYLE::default(), windows::core::w!("STATIC"), PCWSTR::null(),
+            WS_CHILD | WS_VISIBLE, 412, 12, 620, 22, Some(hwnd), None, Some(hinstance), None
+        )?
+    };
+    unsafe { if let Some(state) = state_mut(hwnd) { state.status_hwnd = status; } }
 
     let tooltip = unsafe {
         CreateWindowExW(
@@ -948,21 +1030,8 @@ fn main() -> WinResult<()> {
     add_tooltip(tooltip, hwnd, b_100, "Original size 100% (1)");
     add_tooltip(tooltip, hwnd, b_fit, "Fit to viewer (0 / F)");
     add_tooltip(tooltip, hwnd, b_shot, "Save current viewport (Ctrl+S)");
-    add_tooltip(tooltip, hwnd, b_folder, "Open Screenshots folder (Ctrl+O)");
-    add_tooltip(
-        tooltip,
-        hwnd,
-        b_last,
-        "Select last saved screenshot (Ctrl+Shift+O)",
-    );
-
-    if !initial_target.0.is_null() && initial_target != hwnd {
-        unsafe {
-            if let Some(state) = state_mut(hwnd) {
-                state.switch_target(initial_target);
-            }
-        }
-    }
+    add_tooltip(tooltip, hwnd, b_open, "開啟 Screenshots；本次已截圖時選取最後儲存檔 (Ctrl+O)");
+    unsafe { let _ = SendMessageW(tooltip, windows::Win32::UI::Controls::TTM_ACTIVATE, Some(WPARAM(1)), None); }
 
     unsafe {
         let show = if saved.map(|s| s.maximized).unwrap_or(true) {
@@ -974,6 +1043,10 @@ fn main() -> WinResult<()> {
         let _ = UpdateWindow(hwnd);
         let _ = SetFocus(Some(hwnd));
         SetTimer(Some(hwnd), TIMER_FOREGROUND, FOREGROUND_POLL_MS, None);
+    }
+
+    if let Some(candidate) = find_next_capture_candidate(hwnd, hwnd) {
+        unsafe { if let Some(state) = state_mut(hwnd) { state.switch_target(candidate); } }
     }
 
     let mut msg = MSG::default();
