@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -36,3 +36,21 @@ jobs:
           name: WindowZoomer-windows-x64
           path: dist/WindowZoomer.exe
           if-no-files-found: error
+
+      - name: Publish v0.1.0 Windows release
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[publish-release]') }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $zip = 'dist/WindowZoomer-v0.1.0-win-x64.zip'
+          Compress-Archive -Path 'dist/WindowZoomer.exe' -DestinationPath $zip -Force
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  WindowZoomer-v0.1.0-win-x64.zip" | Set-Content 'dist/SHA256SUMS.txt' -Encoding ascii
+          gh release view v0.1.0 *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create v0.1.0 --target $env:GITHUB_SHA --title 'WindowZoomer v0.1.0' --notes 'Windows x64 magnifier. Portable, unsigned executable; see README for Windows Graphics Capture requirements.'
+          }
+          gh release upload v0.1.0 $zip 'dist/SHA256SUMS.txt' --clobber
+          if ($LASTEXITCODE -ne 0) { throw 'Release upload failed' }
